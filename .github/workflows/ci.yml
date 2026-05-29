@@ -1,0 +1,207 @@
+name: Laravel CI/CD Lab 10
+
+on:
+  push:
+    branches:
+      - dev
+      - develop
+      - development
+      - qa
+      - uat
+      - main
+      - master
+  pull_request:
+    branches:
+      - dev
+      - develop
+      - development
+      - qa
+      - uat
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PHP_VERSION: '8.3'
+
+jobs:
+  tests:
+    name: Tests and coverage gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PHP with Xdebug
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, dom, fileinfo, pdo_sqlite, sqlite3, xml, xmlwriter, curl, zip
+          coverage: xdebug
+          tools: composer:v2
+
+      - name: Install Composer dependencies
+        run: |
+          if [ -f composer.lock ]; then
+            composer install --prefer-dist --no-interaction --no-progress
+          else
+            composer update --prefer-dist --no-interaction --no-progress
+          fi
+
+      - name: Prepare CI environment
+        run: |
+          cp .env.ci .env
+          php artisan key:generate --force
+          php artisan config:clear
+
+      - name: Run Laravel tests with minimum 50 percent coverage
+        run: XDEBUG_MODE=coverage php artisan test --coverage --min=50
+
+  static_analysis:
+    name: Static analysis with Larastan / PHPStan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, dom, fileinfo, pdo_sqlite, sqlite3, xml, xmlwriter, curl, zip
+          coverage: none
+          tools: composer:v2
+
+      - name: Install Composer dependencies
+        run: |
+          if [ -f composer.lock ]; then
+            composer install --prefer-dist --no-interaction --no-progress
+          else
+            composer update --prefer-dist --no-interaction --no-progress
+          fi
+
+      - name: Prepare CI environment
+        run: |
+          cp .env.ci .env
+          php artisan key:generate --force
+          php artisan config:clear
+
+      - name: Install Larastan / PHPStan if needed
+        run: |
+          if [ ! -f vendor/bin/phpstan ] || [ ! -d vendor/larastan/larastan ]; then
+            composer require --dev "larastan/larastan:^3.9" --with-all-dependencies --no-interaction --no-progress
+          fi
+          php artisan config:clear
+
+      - name: Run Larastan / PHPStan
+        run: php vendor/bin/phpstan analyse --configuration=phpstan.neon --memory-limit=1G --error-format=github
+
+  lint:
+    name: Lint check with Laravel Pint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, dom, fileinfo, pdo_sqlite, sqlite3, xml, xmlwriter, curl, zip
+          coverage: none
+          tools: composer:v2
+
+      - name: Install Composer dependencies
+        run: |
+          if [ -f composer.lock ]; then
+            composer install --prefer-dist --no-interaction --no-progress
+          else
+            composer update --prefer-dist --no-interaction --no-progress
+          fi
+
+      - name: Run Laravel Pint in test mode
+        run: php vendor/bin/pint --test
+
+  deploy-dev:
+    name: Simulated deploy to DEV
+    runs-on: ubuntu-latest
+    needs:
+      - tests
+      - static_analysis
+      - lint
+    if: github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'develop' || github.ref_name == 'development')
+    environment:
+      name: development
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Use DEV environment file
+        run: |
+          cp .env.dev .env
+          echo "Deploying to DEV with .env.dev"
+
+  deploy-uat:
+    name: Simulated deploy to UAT
+    runs-on: ubuntu-latest
+    needs:
+      - tests
+      - static_analysis
+      - lint
+    if: github.event_name == 'push' && (github.ref_name == 'qa' || github.ref_name == 'uat')
+    environment:
+      name: uat
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Use UAT environment file
+        run: |
+          cp .env.uat .env
+          echo "Deploying to UAT with .env.uat"
+
+  deploy-prod:
+    name: Simulated deploy to PROD
+    runs-on: ubuntu-latest
+    needs:
+      - tests
+      - static_analysis
+      - lint
+    if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
+    environment:
+      name: production
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Use PROD environment file
+        run: |
+          cp .env.prod .env
+          echo "Deploying to PROD with .env.prod"
+
+  pipeline-summary:
+    name: Pipeline result summary
+    runs-on: ubuntu-latest
+    needs:
+      - tests
+      - static_analysis
+      - lint
+    if: always()
+
+    steps:
+      - name: Write summary
+        run: |
+          echo "## Laravel CI/CD Lab 10" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tests: ${{ needs.tests.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Static analysis: ${{ needs.static_analysis.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Lint: ${{ needs.lint.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Branch: ${{ github.ref_name }}" >> "$GITHUB_STEP_SUMMARY"
